@@ -73,7 +73,7 @@ provision: doctor init
 # Bake the provisioned builder into a reusable golden image.
 [group('setup')]
 bake:
-    incus stop "{{NAME}}-builder"
+    incus stop "{{NAME}}-builder" || true
     incus publish "{{NAME}}-builder" --alias "{{GOLDEN}}" --reuse
     @echo "golden image '{{GOLDEN}}' ready."
     @echo "you can drop the builder: incus delete {{NAME}}-builder --force"
@@ -95,8 +95,9 @@ up name=NAME:
     @until incus exec "{{name}}" -- true 2>/dev/null; do sleep 1; done
     @echo "waiting for network…"
     @until just ip "{{name}}" >/dev/null 2>&1; do sleep 1; done
-    incus exec "{{name}}" -- chown -R {{USER}}:{{USER}} /home/{{USER}}/.config
     @just _inject-key "{{name}}"
+    @echo "waiting for ssh…"
+    @until just ssh "{{name}}" true 2>/dev/null; do sleep 1; done
     @just _restore-creds "{{name}}"
     @just reshare "{{name}}"
     @echo "{{name}} is up at $(just ip {{name}})  (user: {{USER}})"
@@ -174,7 +175,7 @@ _restore-creds name=NAME:
 sync-in path name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
-    src=$(realpath "{{path}}"); base=$(basename "$src")
+    src=$(cd "{{invocation_directory()}}" && realpath "{{path}}"); base=$(basename "$src")
     ip=$(just ip "{{name}}")
     rsync -azP --delete --exclude-from=config/rsync-excludes.txt \
         -e "ssh {{SSH_OPTS}}" "$src/" "{{USER}}@$ip:work/$base/"
@@ -185,7 +186,7 @@ sync-in path name=NAME:
 sync-out path name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
-    dst=$(realpath "{{path}}"); base=$(basename "$dst")
+    dst=$(cd "{{invocation_directory()}}" && realpath "{{path}}"); base=$(basename "$dst")
     ip=$(just ip "{{name}}")
     rsync -azP --exclude-from=config/rsync-excludes.txt \
         -e "ssh {{SSH_OPTS}}" "{{USER}}@$ip:work/$base/" "$dst/"
@@ -211,7 +212,7 @@ clone url name=NAME:
 take path name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
-    src=$(realpath -e "{{path}}"); base=$(basename "$src")
+    src=$(cd "{{invocation_directory()}}" && realpath -e "{{path}}"); base=$(basename "$src")
     dest="{{INCA_WORK}}/{{name}}/$base"
     mkdir -p "$dest"
     rsync -aP --exclude-from=config/rsync-excludes.txt "$src/" "$dest/"
@@ -225,21 +226,41 @@ take path name=NAME:
 share project name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
-    src="{{INCA_WORK}}/{{name}}/{{project}}"
+    project="{{project}}"
+    src="{{INCA_WORK}}/{{name}}/$project"
+    dest="{{WORK}}/$project"
     mkdir -p "$src"
     dev="share-${project//[^A-Za-z0-9]/-}"
     if incus config device get "{{name}}" "$dev" source >/dev/null 2>&1; then
-        echo "{{project}} already shared into {{name}}"; exit 0
+        echo "{{project}} already shared into {{name}}"
+    else
+        incus config device add "{{name}}" "$dev" disk source="$src" path="$dest"
+        echo "shared $src -> {{name}}:$dest (virtiofs, rw)"
     fi
-    incus config device add "{{name}}" "$dev" disk source="$src" path="{{WORK}}/{{project}}"
-    echo "shared $src -> {{name}}:{{WORK}}/{{project}} (virtiofs, rw)"
+    # Incus only auto-mounts virtiofs shares at VM boot; one hot-plugged into a
+    # running VM stays unmounted until restart, so mount it live ourselves. The
+    # guest mount tag is "incus_<device>" (see /sys/fs/virtiofs/*/tag).
+    if [ "$(incus list "{{name}}" -c s -f csv 2>/dev/null)" = RUNNING ]; then
+        if incus exec "{{name}}" -- sh -c 'mountpoint -q "$2" || mount -t virtiofs "$1" "$2"' _ "incus_$dev" "$dest"; then
+            echo "mounted live at {{name}}:$dest"
+        else
+            echo "warning: live-mount failed — 'incus restart {{name}}' will mount it on boot" >&2
+        fi
+    fi
 
 # Stop sharing a project (removes the virtiofs device; the host copy is untouched).
 [group('code')]
 unshare project name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
+    project="{{project}}"
     dev="share-${project//[^A-Za-z0-9]/-}"
+    dest="{{WORK}}/$project"
+    # Unmount in the guest first (while virtiofsd is alive); removing the device on a
+    # running VM otherwise leaves a dangling mount. Then drop the empty mountpoint.
+    if [ "$(incus list "{{name}}" -c s -f csv 2>/dev/null)" = RUNNING ]; then
+        incus exec "{{name}}" -- sh -c 'mountpoint -q "$1" && umount "$1"; rmdir "$1" 2>/dev/null || true' _ "$dest" || true
+    fi
     incus config device remove "{{name}}" "$dev"
     echo "unshared {{project}} from {{name}}"
 
@@ -261,7 +282,7 @@ reshare name=NAME:
 mount path name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
-    base=$(basename "$(realpath "{{path}}")")
+    base=$(basename "$(cd "{{invocation_directory()}}" && realpath "{{path}}")")
     ip=$(just ip "{{name}}")
     mnt="$HOME/inca/$base"; mkdir -p "$mnt"
     # Clear any stale mount first (e.g. a dead one pointing at a prior instance's IP).
@@ -275,7 +296,7 @@ mount path name=NAME:
 unmount path:
     #!/usr/bin/env bash
     set -euo pipefail
-    base=$(basename "$(realpath "{{path}}")")
+    base=$(basename "$(cd "{{invocation_directory()}}" && realpath "{{path}}")")
     fusermount -u "$HOME/inca/$base" && echo "unmounted $HOME/inca/$base"
 
 # Forward one or more guest ports to localhost (Ctrl-C to stop). e.g. just forward 3000 5173

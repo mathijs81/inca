@@ -106,6 +106,17 @@ for t in rsync ssh sshfs; do
   fi
 done
 
+# --- virtiofsd: required by the primary `share`/`take`/`clone` workflow ------
+# The Incus .deb relies on the host's virtiofsd; the snap bundles its own. Without
+# it, virtiofs disk shares fail at device-start with "Virtiofsd isn't running".
+if command -v virtiofsd >/dev/null 2>&1 \
+   || ls /usr/lib/virtiofsd /usr/libexec/virtiofsd /usr/lib/qemu/virtiofsd >/dev/null 2>&1; then
+  g "virtiofsd present (needed for just share/take/clone)"
+else
+  y "virtiofsd not found — 'just share/take/clone' will fail with \"Virtiofsd isn't running\""
+  note "install: sudo apt install virtiofsd   (only the Incus .deb needs this; the snap bundles it)"
+fi
+
 # --- base image availability ------------------------------------------------
 if command -v incus >/dev/null 2>&1; then
   if incus image info "$IMAGE" >/dev/null 2>&1; then
