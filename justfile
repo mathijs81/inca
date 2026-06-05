@@ -6,6 +6,7 @@ NAME    := env_var_or_default("VM_NAME", "agentbox")
 IMAGE   := env_var_or_default("VM_IMAGE", "images:ubuntu/26.04/cloud")
 CPU     := env_var_or_default("VM_CPU", "4")
 MEM     := env_var_or_default("VM_MEM_MAX", "8GiB")
+ROOTSZ  := env_var_or_default("VM_ROOT_SIZE", "40GiB")
 USER    := env_var_or_default("VM_USER", "dev")
 STORAGE := env_var_or_default("VM_STORAGE", "default")
 NETWORK := env_var_or_default("VM_NETWORK", "incusbr0")
@@ -51,6 +52,7 @@ init:
 provision: doctor init
     -incus delete "{{NAME}}-builder" --force
     incus launch "{{IMAGE}}" "{{NAME}}-builder" --vm -s "{{STORAGE}}" \
+        -d root,size="{{ROOTSZ}}" \
         -c limits.cpu="{{CPU}}" -c limits.memory="{{MEM}}" \
         -c cloud-init.user-data="$(cat config/cloud-init.yaml)"
     @echo "waiting for guest agent…"
@@ -83,9 +85,12 @@ _terminfo target:
 up name=NAME:
     @if incus info "{{name}}" >/dev/null 2>&1; then echo "{{name}} already exists — 'just start {{name}}' to resume it, or 'just reset {{name}}' for a clean one"; exit 1; fi
     incus launch "{{GOLDEN}}" "{{name}}" --vm -s "{{STORAGE}}" \
+        -d root,size="{{ROOTSZ}}" \
         -c limits.cpu="{{CPU}}" -c limits.memory="{{MEM}}"
     @echo "waiting for guest agent…"
     @until incus exec "{{name}}" -- true 2>/dev/null; do sleep 1; done
+    @echo "waiting for network…"
+    @until just ip "{{name}}" >/dev/null 2>&1; do sleep 1; done
     incus exec "{{name}}" -- chown -R {{USER}}:{{USER}} /home/{{USER}}/.config
     @just _inject-key "{{name}}"
     @just _restore-creds "{{name}}"
@@ -181,13 +186,20 @@ sync-out path name=NAME:
         -e "ssh {{SSH_OPTS}}" "{{USER}}@$ip:work/$base/" "$dst/"
     echo "synced {{name}}:{{WORK}}/$base -> $dst"
 
-# Git-clone a repo directly inside the VM (alternative to sync-in).
+# Clone a repo on the HOST (using your creds), then rsync it into the VM's work/.
+# Keeps all GitHub auth host-side: the untrusted VM never needs your keys, a token,
+# or even github.com host keys. Work in the VM, then `sync-out` and push host-side.
 [group('code')]
 clone url name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
     ip=$(just ip "{{name}}")
-    ssh {{SSH_OPTS}} "{{USER}}@$ip" "cd work && git clone '{{url}}'"
+    base=$(basename "{{url}}" .git)
+    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+    git clone "{{url}}" "$tmp/$base"
+    rsync -azP --exclude-from=config/rsync-excludes.txt \
+        -e "ssh {{SSH_OPTS}}" "$tmp/$base/" "{{USER}}@$ip:work/$base/"
+    echo "cloned $base -> {{name}}:{{WORK}}/$base (host-side; no creds in VM)"
 
 # sshfs-mount a guest project on the host for browsing (read-only by default).
 [group('inspect')]
@@ -248,7 +260,20 @@ start name=NAME:
     incus start "{{name}}"
     @echo "waiting for guest agent…"
     @until incus exec "{{name}}" -- true 2>/dev/null; do sleep 1; done
+    @echo "waiting for network…"
+    @until just ip "{{name}}" >/dev/null 2>&1; do sleep 1; done
     @echo "{{name}} resumed at $(just ip {{name}})  (user: {{USER}})"
+
+# A restart applies the new size; the Ubuntu cloud image auto-grows the partition
+# and filesystem on boot. Growing only — incus cannot shrink a disk.
+# Grow an instance's root disk, e.g. `just resize-disk 60GiB agentbox`.
+[group('instances')]
+resize-disk size name=NAME:
+    incus config device set "{{name}}" root size="{{size}}" \
+        || incus config device override "{{name}}" root size="{{size}}"
+    incus restart "{{name}}"
+    @until incus exec "{{name}}" -- true 2>/dev/null; do sleep 1; done
+    @incus exec "{{name}}" -- df -h /
 
 # Delete an instance for good.
 [group('instances')]

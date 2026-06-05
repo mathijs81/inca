@@ -62,7 +62,7 @@ just up another-box  # fresh VM, your creds already inside
 
 ```sh
 just sync-in ~/code/myproject mybox   # rsync a project into the VM (skips node_modules, build caches)
-just clone <git-url> mybox            # …or clone straight inside the VM
+just clone <git-url> mybox            # …or clone host-side (your creds) and rsync it in
 just ssh mybox                        # shell in and turn the agent loose
 just sync-out ~/code/myproject mybox  # pull results back to the host
 just mount ~/code/myproject mybox     # browse the guest's copy read-only on the host (sshfs)
