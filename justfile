@@ -2,7 +2,7 @@ set dotenv-load := true
 set dotenv-filename := "config/vm.env"
 set shell := ["bash", "-uc"]
 
-NAME    := env_var_or_default("VM_NAME", "agentbox")
+NAME    := env_var_or_default("VM_NAME", "inca-vm")
 IMAGE   := env_var_or_default("VM_IMAGE", "images:ubuntu/26.04/cloud")
 CPU     := env_var_or_default("VM_CPU", "4")
 MEM     := env_var_or_default("VM_MEM_MAX", "8GiB")
@@ -10,8 +10,12 @@ ROOTSZ  := env_var_or_default("VM_ROOT_SIZE", "40GiB")
 USER    := env_var_or_default("VM_USER", "dev")
 STORAGE := env_var_or_default("VM_STORAGE", "default")
 NETWORK := env_var_or_default("VM_NETWORK", "incusbr0")
-GOLDEN  := env_var_or_default("GOLDEN_IMAGE", "agentbox-golden")
+GOLDEN  := env_var_or_default("GOLDEN_IMAGE", "inca-golden")
 WORK    := "/home/" + USER + "/work"
+
+# Host-side home for shared project trees: INCA_WORK/<vm>/<project> is shared over
+# virtiofs into <vm> at work/<project>. The host copy is the source of truth.
+INCA_WORK := env_var_or_default("INCA_WORK", env_var("HOME") + "/inca-work")
 
 SSH_OPTS := "-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
@@ -94,6 +98,7 @@ up name=NAME:
     incus exec "{{name}}" -- chown -R {{USER}}:{{USER}} /home/{{USER}}/.config
     @just _inject-key "{{name}}"
     @just _restore-creds "{{name}}"
+    @just reshare "{{name}}"
     @echo "{{name}} is up at $(just ip {{name}})  (user: {{USER}})"
 
 # Destroy and relaunch clean from the golden image.
@@ -140,7 +145,7 @@ save-creds name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
     ip=$(just ip "{{name}}")
-    creds="${AGENTVM_CREDS:-$HOME/.config/agentvm-creds}"
+    creds="${INCA_CREDS:-$HOME/.config/inca-creds}"
     install -d -m 700 "$creds"
     grep -vE '^\s*(#|$)' config/cred-paths.txt | while read -r rel; do
         if rsync -aR -e "ssh {{SSH_OPTS}}" "{{USER}}@$ip:/home/{{USER}}/./$rel" "$creds/" 2>/dev/null; then
@@ -155,7 +160,7 @@ save-creds name=NAME:
 _restore-creds name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
-    creds="${AGENTVM_CREDS:-$HOME/.config/agentvm-creds}"
+    creds="${INCA_CREDS:-$HOME/.config/inca-creds}"
     [ -d "$creds" ] || { echo "no saved creds yet ($creds) — run 'just login' then 'just save-creds'"; exit 0; }
     ip=$(just ip "{{name}}")
     grep -vE '^\s*(#|$)' config/cred-paths.txt | while read -r rel; do
@@ -165,7 +170,7 @@ _restore-creds name=NAME:
     echo "creds restored into {{name}}"
 
 # rsync a host project dir INTO the VM (excludes node_modules & build caches).
-[group('code')]
+[group('deprecated')]
 sync-in path name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -176,7 +181,7 @@ sync-in path name=NAME:
     echo "synced $base -> {{name}}:{{WORK}}/$base"
 
 # rsync results back OUT to the host (no --delete; skips rebuilt artifacts).
-[group('code')]
+[group('deprecated')]
 sync-out path name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -186,29 +191,79 @@ sync-out path name=NAME:
         -e "ssh {{SSH_OPTS}}" "{{USER}}@$ip:work/$base/" "$dst/"
     echo "synced {{name}}:{{WORK}}/$base -> $dst"
 
-# Clone a repo on the HOST (using your creds), then rsync it into the VM's work/.
-# Keeps all GitHub auth host-side: the untrusted VM never needs your keys, a token,
-# or even github.com host keys. Work in the VM, then `sync-out` and push host-side.
+# GitHub auth stays host-side: the untrusted VM never sees your keys/token — it just
+# gets the working tree. Edit/commit/push on the host; the VM works the files live.
+# Clone a repo into INCA_WORK/<name>/<project> on the host, then share it into <name>.
 [group('code')]
 clone url name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
-    ip=$(just ip "{{name}}")
     base=$(basename "{{url}}" .git)
-    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-    git clone "{{url}}" "$tmp/$base"
-    rsync -azP --exclude-from=config/rsync-excludes.txt \
-        -e "ssh {{SSH_OPTS}}" "$tmp/$base/" "{{USER}}@$ip:work/$base/"
-    echo "cloned $base -> {{name}}:{{WORK}}/$base (host-side; no creds in VM)"
+    dest="{{INCA_WORK}}/{{name}}/$base"
+    [ -e "$dest" ] && { echo "$dest already exists — remove it or pick another VM" >&2; exit 1; }
+    mkdir -p "$(dirname "$dest")"
+    git clone "{{url}}" "$dest"
+    just share "$base" "{{name}}"
+
+# rsync copy excludes node_modules & build caches; the source dir is left intact.
+# Adopt an existing host dir into INCA_WORK/<name>/<project>, then share it into <name>.
+[group('code')]
+take path name=NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src=$(realpath -e "{{path}}"); base=$(basename "$src")
+    dest="{{INCA_WORK}}/{{name}}/$base"
+    mkdir -p "$dest"
+    rsync -aP --exclude-from=config/rsync-excludes.txt "$src/" "$dest/"
+    just share "$base" "{{name}}"
+
+# TRUST TRADE-OFF: virtiofs grants the (untrusted) VM read-write access to the host
+# dir, unlike the deprecated sync-in/mount which keep the sandbox intact. Use only
+# for repos you'd push anyway. Host uid 1000 == VM dev uid 1000, so ownership maps.
+# Share INCA_WORK/<name>/<project> into VM <name> at work/<project> (idempotent).
+[group('code')]
+share project name=NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="{{INCA_WORK}}/{{name}}/{{project}}"
+    mkdir -p "$src"
+    dev="share-${project//[^A-Za-z0-9]/-}"
+    if incus config device get "{{name}}" "$dev" source >/dev/null 2>&1; then
+        echo "{{project}} already shared into {{name}}"; exit 0
+    fi
+    incus config device add "{{name}}" "$dev" disk source="$src" path="{{WORK}}/{{project}}"
+    echo "shared $src -> {{name}}:{{WORK}}/{{project}} (virtiofs, rw)"
+
+# Stop sharing a project (removes the virtiofs device; the host copy is untouched).
+[group('code')]
+unshare project name=NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dev="share-${project//[^A-Za-z0-9]/-}"
+    incus config device remove "{{name}}" "$dev"
+    echo "unshared {{project}} from {{name}}"
+
+# Called by `up` so a reset VM (which loses its devices) gets its host projects back.
+# Re-attach every project under INCA_WORK/<name>/ as a virtiofs share.
+[group('code')]
+reshare name=NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="{{INCA_WORK}}/{{name}}"
+    [ -d "$root" ] || { echo "no host work dir yet ($root)"; exit 0; }
+    shopt -s nullglob
+    for d in "$root"/*/; do
+        just share "$(basename "$d")" "{{name}}"
+    done
 
 # sshfs-mount a guest project on the host for editing (read-write).
-[group('inspect')]
+[group('deprecated')]
 mount path name=NAME:
     #!/usr/bin/env bash
     set -euo pipefail
     base=$(basename "$(realpath "{{path}}")")
     ip=$(just ip "{{name}}")
-    mnt="$HOME/agentvm/$base"; mkdir -p "$mnt"
+    mnt="$HOME/inca/$base"; mkdir -p "$mnt"
     # Clear any stale mount first (e.g. a dead one pointing at a prior instance's IP).
     fusermount -u "$mnt" 2>/dev/null || true
     sshfs "{{USER}}@$ip:work/$base" "$mnt" \
@@ -216,12 +271,12 @@ mount path name=NAME:
     echo "mounted (rw) at $mnt"
 
 # Unmount a previously sshfs-mounted project.
-[group('inspect')]
+[group('deprecated')]
 unmount path:
     #!/usr/bin/env bash
     set -euo pipefail
     base=$(basename "$(realpath "{{path}}")")
-    fusermount -u "$HOME/agentvm/$base" && echo "unmounted $HOME/agentvm/$base"
+    fusermount -u "$HOME/inca/$base" && echo "unmounted $HOME/inca/$base"
 
 # Forward one or more guest ports to localhost (Ctrl-C to stop). e.g. just forward 3000 5173
 [group('inspect')]
@@ -268,7 +323,7 @@ start name=NAME:
 
 # A restart applies the new size; the Ubuntu cloud image auto-grows the partition
 # and filesystem on boot. Growing only — incus cannot shrink a disk.
-# Grow an instance's root disk, e.g. `just resize-disk 60GiB agentbox`.
+# Grow an instance's root disk, e.g. `just resize-disk 60GiB inca-vm`.
 [group('instances')]
 resize-disk size name=NAME:
     incus config device set "{{name}}" root size="{{size}}" \

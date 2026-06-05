@@ -26,7 +26,7 @@ users:
     lock_passwd: true
 
 write_files:
-  - path: /etc/sysctl.d/99-agentvm.conf
+  - path: /etc/sysctl.d/99-inca.conf
     content: |
       vm.swappiness=10
 

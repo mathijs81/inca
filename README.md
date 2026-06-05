@@ -1,10 +1,10 @@
-# incus-agents
+# Inca
 
-Run coding agents (Claude Code, Cursor CLI, GitHub Copilot CLI) in disposable
-[Incus](https://linuxcontainers.org/incus/) VMs, so you can let them work in
-`--dangerously-skip-permissions` / no-confirmation mode without giving them your
-laptop. Each instance is a throwaway VM cloned from a baked golden image; your
-real machine only ever talks to it over SSH/rsync.
+**INC**us **A**gents — run coding agents (Claude Code, Cursor CLI, GitHub Copilot
+CLI) in disposable [Incus](https://linuxcontainers.org/incus/) VMs, so you can let
+them work in `--dangerously-skip-permissions` / no-confirmation mode without giving
+them your laptop. Each instance is a throwaway VM cloned from a baked golden image;
+your real machine only ever talks to it over SSH and a shared project directory.
 
 Everything is gated through a [`just`](https://github.com/casey/just) file — no
 hidden state, just readable recipes.
@@ -14,7 +14,8 @@ hidden state, just readable recipes.
 Agents are most useful when they can run commands, edit files, and install
 things without asking. That's also exactly when you don't want them on your host.
 This gives each agent a real Linux box (own kernel, Docker, sudo) that you can
-reset to a clean state in seconds and that has no access to anything outside it.
+reset to a clean state in seconds and whose only window onto your host is the
+project directories you explicitly share into it.
 
 ## How it works
 
@@ -23,11 +24,13 @@ reset to a clean state in seconds and that has no access to anything outside it.
 2. That builder is **baked** into a reusable golden image — tools included, **no
    credentials**.
 3. Each `just up` launches a fresh **instance** from the golden image, injects
-   your SSH key, and replays saved agent credentials.
-4. You push code in (rsync or git clone), SSH in, let the agent rip, and pull
-   results back out — or `just reset` for a clean slate.
+   your SSH key, replays saved agent credentials, and re-shares your projects.
+4. Your code lives on the **host** at `~/inca-work/<vm>/<project>` and is shared
+   into the VM over virtiofs at `work/<project>` — near-native speed, no rsync
+   round-trips. You edit and run git on the host; the agent works the same files
+   live inside the VM. `just reset` for a clean slate; the host copy survives.
 
-Credentials are captured **once** to `~/.config/agentvm-creds` (chmod 700,
+Credentials are captured **once** to `~/.config/inca-creds` (chmod 700,
 outside this repo) and replayed into each instance. They're never baked into the
 image.
 
@@ -36,7 +39,7 @@ image.
 - Linux host with Incus and hardware virtualization (`/dev/kvm`). On a
   virtualized host you need nested virt, or you can fall back to system
   containers (weaker isolation).
-- `rsync`, `ssh`, and `sshfs` (for `just mount`).
+- `rsync` and `ssh` (and `sshfs` only for the deprecated `just mount`).
 - An SSH keypair (`~/.ssh/id_ed25519`).
 
 Run `just doctor` — it checks all of the above and prints actionable hints.
@@ -44,12 +47,12 @@ Run `just doctor` — it checks all of the above and prints actionable hints.
 ## Quick start
 
 ```sh
-just doctor          # preflight: incus, KVM/nested virt, RAM, tooling, base image
-just provision       # build + install tools into a builder VM
-just bake            # publish the builder as the golden image
-just up mybox        # launch a fresh instance from the golden image
-just login mybox     # one-time: run each agent's /login flow inside the VM
-just save-creds mybox # capture agent creds to the host (do this once)
+just doctor            # preflight: incus, KVM/nested virt, RAM, tooling, base image
+just provision         # build + install tools into a builder VM
+just bake              # publish the builder as the golden image
+just up inca-vm        # launch a fresh instance from the golden image
+just login inca-vm     # one-time: run each agent's /login flow inside the VM
+just save-creds inca-vm # capture agent creds to the host (do this once)
 ```
 
 From then on, spinning up a ready-to-go agent box is just:
@@ -60,26 +63,49 @@ just up another-box  # fresh VM, your creds already inside
 
 ## Daily use
 
+Your projects live on the host at `~/inca-work/<vm>/<project>` and are shared into
+the VM over virtiofs at `work/<project>`. Get a project in one of two ways:
+
 ```sh
-just sync-in ~/code/myproject mybox   # rsync a project into the VM (skips node_modules, build caches)
-just clone <git-url> mybox            # …or clone host-side (your creds) and rsync it in
-just ssh mybox                        # shell in and turn the agent loose
-just sync-out ~/code/myproject mybox  # pull results back to the host
-just mount ~/code/myproject mybox     # mount the guest's copy read-write on the host (sshfs)
+just clone <git-url> inca-vm          # clone host-side (your creds) into inca-work, then share
+just take ~/code/myproject inca-vm    # copy an existing dir into inca-work, then share
+```
+
+Then work — editing and git happen on the **host**; the agent sees the same files
+live in the VM:
+
+```sh
+just ssh inca-vm                      # shell in and turn the agent loose
 just forward 3000 5173                # forward guest dev-server ports to localhost
+git gui                               # …or just run your tools natively against ~/inca-work/inca-vm/myproject
+```
+
+Manage shares directly when you need to:
+
+```sh
+just share myproject inca-vm          # (re)attach ~/inca-work/inca-vm/myproject
+just unshare myproject inca-vm        # detach (host copy untouched)
+just reshare inca-vm                  # re-attach everything under ~/inca-work/inca-vm/ (run by `up`)
 ```
 
 Lifecycle:
 
 ```sh
 just list             # all instances
-just stop mybox       # freeze (keeps disk state)
-just start mybox      # resume
-just reset mybox      # destroy + relaunch clean from golden
-just destroy mybox    # delete for good
+just stop inca-vm     # freeze (keeps disk state)
+just start inca-vm    # resume
+just reset inca-vm    # destroy + relaunch clean from golden (host projects re-shared on boot)
+just destroy inca-vm  # delete for good
 ```
 
-Run `just` with no arguments for the full grouped list.
+Run `just` with no arguments for the full grouped list. The old rsync/sshfs
+recipes (`sync-in`, `sync-out`, `mount`) live in a `deprecated` group — use them
+only when you deliberately don't want to share host files into an untrusted VM.
+
+> **Trust note:** a shared dir gives the (untrusted) VM read-write access to that
+> host directory. Only share repos you'd push anyway. Everything else on your host
+> stays out of reach. Host uid 1000 maps to the VM's `dev` user, so ownership lines
+> up without extra config.
 
 ## Configuration
 
