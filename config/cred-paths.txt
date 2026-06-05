@@ -1,0 +1,7 @@
+# Agent auth files/dirs, relative to the dev home. `just save-creds` captures
+# these to the host; `just up` replays them into each fresh instance.
+# Add a line if you adopt another agent.
+.claude/.credentials.json
+.claude.json
+.config/cursor/auth.json
+.copilot/config.json

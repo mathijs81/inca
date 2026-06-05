@@ -1,0 +1,12 @@
+# Mirrored into the VM at ~/.config/mise/config.toml during provisioning.
+# Keep roughly in sync with your host ~/.config/mise/config.toml.
+[tools]
+bat = "latest"
+delta = "latest"
+duckdb = "latest"
+fzf = "latest"
+github-cli = "latest"
+java = "temurin-25"
+lazydocker = "latest"
+node = "latest"
+tmux = "latest"

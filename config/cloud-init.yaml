@@ -1,0 +1,39 @@
+#cloud-config
+# Machine-level provisioning only. Userland tools (mise, agents, terminfo) are
+# installed afterwards by scripts/setup-tools.sh so they can use your mirrored
+# mise config and correct ordering. No credentials are baked in here.
+package_update: true
+package_upgrade: false
+packages:
+  - curl
+  - rsync
+  - git
+  - openssh-server
+  - build-essential
+  - ca-certificates
+  - gnupg
+  - unzip
+  - jq
+  - tmux
+
+users:
+  - name: dev
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd: true
+
+write_files:
+  - path: /etc/sysctl.d/99-agentvm.conf
+    content: |
+      vm.swappiness=10
+
+runcmd:
+  # Guest swap so the balloon can grow/shrink without thrashing.
+  - [bash, -c, "test -f /swapfile || (fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab)"]
+  # Docker (nested 'just works' inside a real kernel). Convenience script is fine for dev.
+  - [bash, -c, "curl -fsSL https://get.docker.com | sh"]
+  - [usermod, -aG, docker, dev]
+  - [systemctl, enable, --now, ssh]
+  - [install, -d, -o, dev, -g, dev, -m, "0700", /home/dev/.ssh]
+  - [install, -d, -o, dev, -g, dev, -m, "0755", /home/dev/work]

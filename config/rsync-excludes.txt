@@ -1,0 +1,19 @@
+# Reconstructable / hot-IO artifacts the guest rebuilds locally.
+# Source (including .git, so the guest can commit/push) is synced; these are not.
+node_modules/
+.pnpm-store/
+.gradle/
+.turbo/
+.next/
+.nuxt/
+.svelte-kit/
+dist/
+build/
+out/
+target/
+.venv/
+__pycache__/
+.cache/
+.parcel-cache/
+*.log
+.DS_Store
