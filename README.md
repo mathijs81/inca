@@ -65,7 +65,7 @@ just sync-in ~/code/myproject mybox   # rsync a project into the VM (skips node_
 just clone <git-url> mybox            # …or clone host-side (your creds) and rsync it in
 just ssh mybox                        # shell in and turn the agent loose
 just sync-out ~/code/myproject mybox  # pull results back to the host
-just mount ~/code/myproject mybox     # browse the guest's copy read-only on the host (sshfs)
+just mount ~/code/myproject mybox     # mount the guest's copy read-write on the host (sshfs)
 just forward 3000 5173                # forward guest dev-server ports to localhost
 ```
 

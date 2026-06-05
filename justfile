@@ -201,7 +201,7 @@ clone url name=NAME:
         -e "ssh {{SSH_OPTS}}" "$tmp/$base/" "{{USER}}@$ip:work/$base/"
     echo "cloned $base -> {{name}}:{{WORK}}/$base (host-side; no creds in VM)"
 
-# sshfs-mount a guest project on the host for browsing (read-only by default).
+# sshfs-mount a guest project on the host for editing (read-write).
 [group('inspect')]
 mount path name=NAME:
     #!/usr/bin/env bash
@@ -209,9 +209,11 @@ mount path name=NAME:
     base=$(basename "$(realpath "{{path}}")")
     ip=$(just ip "{{name}}")
     mnt="$HOME/agentvm/$base"; mkdir -p "$mnt"
+    # Clear any stale mount first (e.g. a dead one pointing at a prior instance's IP).
+    fusermount -u "$mnt" 2>/dev/null || true
     sshfs "{{USER}}@$ip:work/$base" "$mnt" \
-        -o ro,reconnect,follow_symlinks,StrictHostKeyChecking=accept-new,UserKnownHostsFile=/dev/null
-    echo "mounted (ro) at $mnt"
+        -o reconnect,follow_symlinks,StrictHostKeyChecking=accept-new,UserKnownHostsFile=/dev/null
+    echo "mounted (rw) at $mnt"
 
 # Unmount a previously sshfs-mounted project.
 [group('inspect')]
