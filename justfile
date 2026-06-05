@@ -58,6 +58,7 @@ provision: doctor init
     incus launch "{{IMAGE}}" "{{NAME}}-builder" --vm -s "{{STORAGE}}" \
         -d root,size="{{ROOTSZ}}" \
         -c limits.cpu="{{CPU}}" -c limits.memory="{{MEM}}" \
+        -c security.secureboot=false \
         -c cloud-init.user-data="$(cat config/cloud-init.yaml)"
     @echo "waiting for guest agent…"
     @until incus exec "{{NAME}}-builder" -- true 2>/dev/null; do sleep 2; done
@@ -84,13 +85,17 @@ _terminfo target:
         && echo "terminfo: xterm-ghostty installed" \
         || echo "terminfo: skipped (no xterm-ghostty on host)"
 
+# secureboot=false: the Zabbly Incus package's AppArmor profile won't grant the
+# distro Secure Boot firmware (/usr/share/OVMF/*.ms.fd), so a secureboot VM fails to
+# boot with "Permission denied"; we don't need Secure Boot for dev sandboxes anyway.
 # Launch a NEW working instance from the golden image and wire up SSH.
 [group('instances')]
 up name=NAME:
     @if incus info "{{name}}" >/dev/null 2>&1; then echo "{{name}} already exists — 'just start {{name}}' to resume it, or 'just reset {{name}}' for a clean one"; exit 1; fi
     incus launch "{{GOLDEN}}" "{{name}}" --vm -s "{{STORAGE}}" \
         -d root,size="{{ROOTSZ}}" \
-        -c limits.cpu="{{CPU}}" -c limits.memory="{{MEM}}"
+        -c limits.cpu="{{CPU}}" -c limits.memory="{{MEM}}" \
+        -c security.secureboot=false
     @echo "waiting for guest agent…"
     @until incus exec "{{name}}" -- true 2>/dev/null; do sleep 1; done
     @echo "waiting for network…"
@@ -231,11 +236,20 @@ share project name=NAME:
     dest="{{WORK}}/$project"
     mkdir -p "$src"
     dev="share-${project//[^A-Za-z0-9]/-}"
+    # io.cache=unsafe maps to virtiofsd cache=always, giving the guest a page cache
+    # to back mmap. Without it virtiofs has no cache and mmap fails — e.g. JVM/JaCoCo
+    # zip mmap. Takes effect on the next VM (re)start.
     if incus config device get "{{name}}" "$dev" source >/dev/null 2>&1; then
-        echo "{{project}} already shared into {{name}}"
+        # Best-effort reconcile: a live set fails (and rolls back) while the share is
+        # mounted/busy, so an already-running VM needs a restart to pick it up.
+        if incus config device set "{{name}}" "$dev" io.cache=unsafe 2>/dev/null; then
+            echo "{{project}} already shared into {{name}} (io.cache=unsafe ensured)"
+        else
+            echo "{{project}} already shared into {{name}} — restart it to apply io.cache=unsafe"
+        fi
     else
-        incus config device add "{{name}}" "$dev" disk source="$src" path="$dest"
-        echo "shared $src -> {{name}}:$dest (virtiofs, rw)"
+        incus config device add "{{name}}" "$dev" disk source="$src" path="$dest" io.cache=unsafe
+        echo "shared $src -> {{name}}:$dest (virtiofs, rw, io.cache=unsafe)"
     fi
     # Incus only auto-mounts virtiofs shares at VM boot; one hot-plugged into a
     # running VM stays unmounted until restart, so mount it live ourselves. The
@@ -352,6 +366,29 @@ resize-disk size name=NAME:
     incus restart "{{name}}"
     @until incus exec "{{name}}" -- true 2>/dev/null; do sleep 1; done
     @incus exec "{{name}}" -- df -h /
+
+# Memory changes apply live via the virtio-balloon, but only DOWN, or back UP to the
+# size the VM booted with (VM_MEM_MAX). To raise it above that boot ceiling, pass
+# restart=1 (QEMU can't hot-add RAM the guest never got at boot).
+# Set an instance's memory limit, e.g. `just resize-mem 6GiB` or `just resize-mem 16GiB inca-vm restart=1`.
+[group('instances')]
+resize-mem size name=NAME restart="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{restart}}" ]; then
+        # Incus rejects raising memory above the boot-time size on a running VM, so
+        # stop it, set the limit while stopped, then start fresh at the new size.
+        echo "stopping {{name}} to apply {{size}}…"
+        incus stop "{{name}}"
+        incus config set "{{name}}" limits.memory "{{size}}"
+        incus start "{{name}}"
+        until incus exec "{{name}}" -- true 2>/dev/null; do sleep 1; done
+    else
+        # Live path via the balloon: works going down, or back up to the boot size.
+        incus config set "{{name}}" limits.memory "{{size}}"
+        echo "set limits.memory={{size}} on {{name}} (live; pass restart=1 to raise above the boot-time size)"
+    fi
+    incus exec "{{name}}" -- free -h 2>/dev/null || true
 
 # Delete an instance for good.
 [group('instances')]

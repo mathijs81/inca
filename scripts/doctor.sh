@@ -13,11 +13,29 @@ note() { printf '       %s\n' "$1"; }
 MEM_MAX="${VM_MEM_MAX:-8GiB}"
 IMAGE="${VM_IMAGE:-images:ubuntu/26.04/cloud}"
 
+# Minimum Incus that actually honors io.cache=unsafe on virtiofs shares, so mmap
+# (JVM/JaCoCo zip mmap) works on `just share`d dirs. 6.0.x stores the key but
+# ignores it at runtime; 7.0 is the first LTS that applies it.
+MIN_INCUS="7.0"
+INCUS_DOCS="https://linuxcontainers.org/incus/docs/main/installing/"
+INCUS_REPO="https://github.com/zabbly/incus"
+ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+
 echo "== agent VM doctor =="
 
 # --- incus present & usable -------------------------------------------------
 if command -v incus >/dev/null 2>&1; then
-  g "incus installed ($(incus version 2>/dev/null | head -1))"
+  ver="$(incus version 2>/dev/null | awk -F': ' '/Server version/{print $2}')"
+  [ -z "$ver" ] && ver="$(incus version 2>/dev/null | awk -F': ' '/Client version/{print $2}')"
+  g "incus installed (server ${ver:-unknown})"
+  if [ -n "$ver" ] && ver_ge "$ver" "$MIN_INCUS"; then
+    g "incus >= $MIN_INCUS (virtiofs io.cache honored — mmap works on shared dirs)"
+  else
+    r "incus ${ver:-?} is below the required $MIN_INCUS"
+    note "older Incus ignores io.cache on virtiofs, so mmap (JVM/JaCoCo) fails on shared dirs"
+    note "install/upgrade: $INCUS_DOCS"
+    note "upstream packages: $INCUS_REPO"
+  fi
   if incus storage list >/dev/null 2>&1; then
     g "incus reachable for your user"
     POOL="${VM_STORAGE:-default}"
@@ -42,9 +60,10 @@ if command -v incus >/dev/null 2>&1; then
     note "run: incus admin init --minimal   (and ensure you're in the 'incus-admin' group)"
   fi
 else
-  r "incus not installed"
-  note "Ubuntu 24.04+:  sudo apt install incus"
-  note "or the upstream repo: https://github.com/zabbly/incus  then: sudo apt install incus"
+  r "incus not installed (need >= $MIN_INCUS)"
+  note "the distro package is often too old; use the upstream LTS repo for >= $MIN_INCUS:"
+  note "  install guide: $INCUS_DOCS"
+  note "  upstream packages: $INCUS_REPO"
   note "after install:  sudo adduser \"\$USER\" incus-admin && newgrp incus-admin && incus admin init --minimal"
 fi
 

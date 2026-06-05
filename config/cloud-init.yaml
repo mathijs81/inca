@@ -32,7 +32,7 @@ write_files:
 
 runcmd:
   # Guest swap so the balloon can grow/shrink without thrashing.
-  - [bash, -c, "test -f /swapfile || (fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab)"]
+  - [bash, -c, "test -f /swapfile || (fallocate -l 8G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab)"]
   # Docker (nested 'just works' inside a real kernel). Convenience script is fine for dev.
   - [bash, -c, "curl -fsSL https://get.docker.com | sh"]
   - [usermod, -aG, docker, dev]

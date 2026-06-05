@@ -36,9 +36,13 @@ image.
 
 ## Requirements
 
-- Linux host with Incus and hardware virtualization (`/dev/kvm`). On a
+- Linux host with **Incus >= 7.0** and hardware virtualization (`/dev/kvm`). On a
   virtualized host you need nested virt, or you can fall back to system
-  containers (weaker isolation).
+  containers (weaker isolation). The distro package is usually older than 7.0 and
+  ignores `io.cache` on virtiofs shares (breaking `mmap`, e.g. JVM/JaCoCo), so
+  install from the upstream LTS repo — see the
+  [install guide](https://linuxcontainers.org/incus/docs/main/installing/) and
+  [upstream packages](https://github.com/zabbly/incus).
 - `rsync` and `ssh` (and `sshfs` only for the deprecated `just mount`).
 - An SSH keypair (`~/.ssh/id_ed25519`).
 
