@@ -129,7 +129,7 @@ done
 # The Incus .deb relies on the host's virtiofsd; the snap bundles its own. Without
 # it, virtiofs disk shares fail at device-start with "Virtiofsd isn't running".
 if command -v virtiofsd >/dev/null 2>&1 \
-   || ls /usr/lib/virtiofsd /usr/libexec/virtiofsd /usr/lib/qemu/virtiofsd >/dev/null 2>&1; then
+   || [ -e /usr/lib/virtiofsd ] || [ -e /usr/libexec/virtiofsd ] || [ -e /usr/lib/qemu/virtiofsd ]; then
   g "virtiofsd present (needed for just share/take/clone)"
 else
   y "virtiofsd not found — 'just share/take/clone' will fail with \"Virtiofsd isn't running\""
