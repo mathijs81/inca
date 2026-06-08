@@ -255,7 +255,7 @@ share project name=NAME:
     # running VM stays unmounted until restart, so mount it live ourselves. The
     # guest mount tag is "incus_<device>" (see /sys/fs/virtiofs/*/tag).
     if [ "$(incus list "{{name}}" -c s -f csv 2>/dev/null)" = RUNNING ]; then
-        if incus exec "{{name}}" -- sh -c 'mountpoint -q "$2" || mount -t virtiofs "$1" "$2"' _ "incus_$dev" "$dest"; then
+        if incus exec "{{name}}" -- sh -c 'mkdir -p "$2"; chown dev:dev "$2" "$3"; mountpoint -q "$2" || mount -t virtiofs "$1" "$2"' _ "incus_$dev" "$dest" "{{WORK}}"; then
             echo "mounted live at {{name}}:$dest"
         else
             echo "warning: live-mount failed — 'incus restart {{name}}' will mount it on boot" >&2
