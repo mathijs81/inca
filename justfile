@@ -291,6 +291,15 @@ reshare name=NAME:
         just share "$(basename "$d")" "{{name}}"
     done
 
+# Our shares run io.cache=unsafe (cache=always) for working mmap, which can leave the
+# guest seeing stale contents after a host-side edit (see TRADEOFFS.md). This drops the
+# guest page cache so the next read/mmap re-fetches from the host.
+# Run after editing a shared file on the host when the guest must see it immediately.
+[group('code')]
+flush name=NAME:
+    @incus exec "{{name}}" -- sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches'
+    @echo "flushed guest page cache on {{name}}"
+
 # sshfs-mount a guest project on the host for editing (read-write).
 [group('deprecated')]
 mount path name=NAME:

@@ -52,3 +52,13 @@ real, so prefer this split if host→guest staleness bites you. (`cache=auto` /
 `metadata` is *not* a usable middle ground: it fails `mmap` with `ENODEV` exactly
 like `cache=none` — confirmed by `tools/test-virtiofs-coherence.sh` — so it buys
 nothing over `cache=none` while giving up nothing useful.)
+
+**DAX (not available here):** virtiofs DAX would be the ideal fix — the guest maps
+file contents directly through a host-provided memory window, bypassing the guest
+page cache entirely, giving working `mmap(MAP_SHARED)` *and* host coherence without
+`cache=always`. But it needs a virtiofsd that exposes a DAX cache window. We ship
+the **Rust** `virtiofsd` (1.10), which has no DAX support (`--cache` is only the
+writeback policy); DAX lived only in the old **C** virtiofsd, deprecated and removed
+from modern QEMU. Incus also doesn't expose the QEMU `vhost-user-fs` `cache-size`
+knob DAX requires. The guest kernel has `CONFIG_FUSE_DAX=y`, but with no host-side
+window there's nothing to map — so `-o dax` is a non-starter on this stack.

@@ -90,7 +90,13 @@ Manage shares directly when you need to:
 just share myproject inca-vm          # (re)attach ~/inca-work/inca-vm/myproject
 just unshare myproject inca-vm        # detach (host copy untouched)
 just reshare inca-vm                  # re-attach everything under ~/inca-work/inca-vm/ (run by `up`)
+just flush inca-vm                    # drop the guest page cache after a host-side edit (see TRADEOFFS.md)
 ```
+
+> **Coherence note:** shares run `io.cache=unsafe` (cache=always) so `mmap` works,
+> but the guest can keep serving stale contents after you edit a shared file *on the
+> host*. Run `just flush <vm>` to force the guest to re-read it. See
+> [`TRADEOFFS.md`](TRADEOFFS.md) for the full story.
 
 Lifecycle:
 
