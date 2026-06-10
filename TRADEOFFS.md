@@ -14,13 +14,24 @@ JaCoCo, SQLite, etc.) errors out with `ENODEV` even though the file is intact.
 
 **What we ship:** `just share` sets `io.cache=unsafe` (`cache=always`) on every
 virtiofs device, which gives the guest a page cache to back mappings, so mmap
-works. Measured cost is smaller than the mode's name suggests:
+works. The cost is real and worth understanding:
 
-- Host→guest coherence still holds for the normal loop. virtiofsd does
-  close-to-open revalidation, so a host-side edit is visible the next time the
-  guest opens the file — the edit-on-host / build-in-guest workflow is unaffected
-  in practice. (A file the guest holds *open or mapped* across a host write can
-  read stale data until it reopens; that's the residual weakness vs `cache=none`.)
+- **Host→guest coherence is broken under `cache=always`.** A host-side edit is
+  *not* reliably visible to the guest — and not just through a file the guest
+  holds open/mapped: even a brand-new `open()`/`read()` on the guest can read the
+  stale pre-edit contents. virtiofsd's close-to-open revalidation does *not* save
+  the edit-on-host / build-in-guest loop here. This is reproducible with
+  [`tools/test-virtiofs-coherence.sh`](tools/test-virtiofs-coherence.sh): under
+  `cache=always` mmap works but a host edit stays invisible to the guest on a fresh
+  open; under `cache=none`/`auto` the host edit is seen but mmap fails. So with a
+  single share there is no mode that gives both working mmap and host coherence —
+  see the stricter alternative below if the coherence gap bites you. In practice
+  the agent does most edits *inside* the guest, so the gap mainly hurts when you
+  edit a file on the host and expect the guest to pick it up immediately.
+  **Escape hatch:** running `sync && echo 3 > /proc/sys/vm/drop_caches` (as root)
+  inside the guest evicts the stale page cache, so the next `read()`/`mmap()`
+  re-fetches the file from the host — verified by the test script. Handy when you
+  knowingly edit a shared file on the host and need the guest to see it now.
 - "unsafe" refers to durability, not corruption: `cache=always` lets the guest
   defer/relax flushes for speed, so a *host* crash could lose recently-written
   guest data. Acceptable for disposable dev VMs whose source of truth is the host
@@ -30,12 +41,14 @@ works. Measured cost is smaller than the mode's name suggests:
 share is mounted (the device is busy) — so existing VMs need a restart to pick it
 up; fresh ones get it from boot.
 
-**Stricter alternative (not used here):** split read paths from mmap paths — keep
+**Stricter alternative (the real fix):** split read paths from mmap paths — keep
 the source tree on virtiofs at `cache=none` (instant host coherence, source reads
 never mmap) and redirect *build output* to the VM's native disk (ext4/xfs), the
 only place mmap actually happens. That gives strict source coherence and working
-mmap at once, at the cost of build artifacts no longer living on the host. We
-prefer the single `cache=always` share for simplicity, since the coherence gap
-above hasn't bitten the host-edit/guest-build loop. (`cache=auto`/`metadata` would
-be the ideal middle ground, but virtiofsd's auto mode historically hasn't backed
-`MAP_SHARED` reliably.)
+mmap at once, at the cost of build artifacts no longer living on the host. This is
+the only configuration tested that satisfies both constraints; we currently still
+ship the single `cache=always` share for simplicity, but the coherence gap above is
+real, so prefer this split if host→guest staleness bites you. (`cache=auto` /
+`metadata` is *not* a usable middle ground: it fails `mmap` with `ENODEV` exactly
+like `cache=none` — confirmed by `tools/test-virtiofs-coherence.sh` — so it buys
+nothing over `cache=none` while giving up nothing useful.)
