@@ -14,9 +14,9 @@ packages:
   - gnupg
   - unzip
   - jq
-  - tmux
   - nano
   - ripgrep
+  - psmisc
 
 users:
   - name: dev

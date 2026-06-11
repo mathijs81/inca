@@ -322,14 +322,14 @@ unmount path:
     base=$(basename "$(cd "{{invocation_directory()}}" && realpath "{{path}}")")
     fusermount -u "$HOME/inca/$base" && echo "unmounted $HOME/inca/$base"
 
-# Forward one or more guest ports to localhost (Ctrl-C to stop). e.g. just forward 3000 5173
+# Forward one or more guest ports to localhost (Ctrl-C to stop). e.g. just forward myvm 3000 5173
 [group('inspect')]
-forward +ports:
+forward name +ports:
     #!/usr/bin/env bash
     set -euo pipefail
-    ip=$(just ip "{{NAME}}")
+    ip=$(just ip "{{name}}")
     args=(); for p in {{ports}}; do args+=(-L "$p:localhost:$p"); done
-    echo "forwarding {{ports}} from {{NAME}} -> localhost (Ctrl-C to stop)"
+    echo "forwarding {{ports}} from {{name}} -> localhost (Ctrl-C to stop)"
     ssh {{SSH_OPTS}} "${args[@]}" -N "{{USER}}@$ip"
 
 # SSH into the instance as the dev user.
