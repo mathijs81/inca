@@ -95,8 +95,9 @@ just flush inca-vm                    # drop the guest page cache after a host-s
 
 > **Coherence note:** shares run `io.cache=unsafe` (cache=always) so `mmap` works,
 > but the guest can keep serving stale contents after you edit a shared file *on the
-> host*. Run `just flush <vm>` to force the guest to re-read it. See
-> [`TRADEOFFS.md`](TRADEOFFS.md) for the full story.
+> host*. Run `just flush <vm>` to force the guest to re-read it — or run `inca-flush`
+> *inside* the guest (e.g. at the top of a build command), which does the same thing
+> without involving the host. See [`TRADEOFFS.md`](TRADEOFFS.md) for the full story.
 
 Lifecycle:
 
@@ -130,7 +131,8 @@ Other knobs:
 - [`config/rsync-excludes.txt`](config/rsync-excludes.txt) — reconstructable
   artifacts the guest rebuilds locally (not synced).
 - [`config/cloud-init.yaml`](config/cloud-init.yaml) — machine-level provisioning
-  (packages, swap, Docker, the `dev` user).
+  (packages, swap, Docker, the `dev` user, the `inca-flush` helper, and the
+  `IS_INCA=1` marker exported in every guest shell/session).
 
 ## License
 

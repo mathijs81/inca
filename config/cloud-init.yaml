@@ -29,8 +29,25 @@ write_files:
   - path: /etc/sysctl.d/99-inca.conf
     content: |
       vm.swappiness=10
+  # Marker so anything running in the guest can tell it's an inca dev VM.
+  # profile.d covers interactive/login shells; /etc/environment (set in runcmd)
+  # covers PAM sessions and most env-reading code.
+  - path: /etc/profile.d/inca.sh
+    content: |
+      export IS_INCA=1
+  - path: /usr/local/bin/inca-flush
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Evict the guest page cache so the next read/mmap re-fetches shared files
+      # from the host. Needed because shares run io.cache=unsafe (cache=always),
+      # which can leave the guest serving stale contents after a host-side edit.
+      # See TRADEOFFS.md. Equivalent to `just flush <vm>` run from the host.
+      exec sudo sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches'
 
 runcmd:
+  # Inca marker for PAM sessions (ssh logins) and non-shell env readers.
+  - [bash, -c, "grep -q '^IS_INCA=' /etc/environment || echo 'IS_INCA=1' >> /etc/environment"]
   # Guest swap so the balloon can grow/shrink without thrashing.
   - [bash, -c, "test -f /swapfile || (fallocate -l 8G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab)"]
   # Docker (nested 'just works' inside a real kernel). Convenience script is fine for dev.
