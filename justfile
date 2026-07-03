@@ -17,6 +17,11 @@ WORK    := "/home/" + USER + "/work"
 # virtiofs into <vm> at work/<project>. The host copy is the source of truth.
 INCA_WORK := env_var_or_default("INCA_WORK", env_var("HOME") + "/inca-work")
 
+# Root under which agent-config.txt paths are resolved for push-config/pull-config.
+# Default $HOME (your live dotfiles). Point it at one collected dir if you'd rather
+# keep all agent config in a single place: INCA_CONFIG_HOME=/home/you/inca-config
+INCA_CONFIG := env_var_or_default("INCA_CONFIG_HOME", env_var("HOME"))
+
 SSH_OPTS := "-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
 _default:
@@ -104,6 +109,7 @@ up name=NAME:
     @echo "waiting for ssh…"
     @until just ssh "{{name}}" true 2>/dev/null; do sleep 1; done
     @just _restore-creds "{{name}}"
+    @just push-config "{{name}}"
     @just reshare "{{name}}"
     @echo "{{name}} is up at $(just ip {{name}})  (user: {{USER}})"
 
@@ -174,6 +180,37 @@ _restore-creds name=NAME:
         rsync -aR -e "ssh {{SSH_OPTS}}" "$creds/./$rel" "{{USER}}@$ip:/home/{{USER}}/"
     done
     echo "creds restored into {{name}}"
+
+# Push global agent config (CLAUDE.md, commands, cursor cli-config, …) into a VM.
+# Sourced live from INCA_CONFIG_HOME (default $HOME). Run anytime to sync a
+# long-lived instance; also run by `up`. Additive — never deletes guest files.
+[group('instances')]
+push-config name=NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ip=$(just ip "{{name}}")
+    root="{{INCA_CONFIG}}"
+    grep -vE '^\s*(#|$)' config/agent-config.txt | while read -r rel; do
+        [ -e "$root/$rel" ] || { echo "  skip   $rel (not in $root)"; continue; }
+        rsync -aR -e "ssh {{SSH_OPTS}}" "$root/./$rel" "{{USER}}@$ip:/home/{{USER}}/"
+        echo "  pushed $rel"
+    done
+    echo "config -> {{name}}"
+
+# Copy agent config back OUT of a VM into INCA_CONFIG_HOME (default $HOME), for when
+# you tweaked config inside the guest and want it home. Additive — no deletes.
+[group('instances')]
+pull-config name=NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ip=$(just ip "{{name}}")
+    root="{{INCA_CONFIG}}"
+    install -d "$root"
+    grep -vE '^\s*(#|$)' config/agent-config.txt | while read -r rel; do
+        rsync -aR --ignore-missing-args -e "ssh {{SSH_OPTS}}" \
+            "{{USER}}@$ip:/home/{{USER}}/./$rel" "$root/" && echo "  pulled $rel"
+    done
+    echo "config <- {{name}}  (into $root)"
 
 # rsync a host project dir INTO the VM (excludes node_modules & build caches).
 [group('deprecated')]

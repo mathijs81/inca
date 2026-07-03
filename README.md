@@ -128,6 +128,12 @@ Other knobs:
   the VM (node, java, tmux, …). Keep roughly in sync with your host config.
 - [`config/cred-paths.txt`](config/cred-paths.txt) — which agent auth files get
   captured and replayed. Add a line when you adopt another agent.
+- [`config/agent-config.txt`](config/agent-config.txt) — global agent config
+  (Claude `CLAUDE.md`/`settings.json`/commands, Cursor `cli-config.json`, …)
+  mirrored into each VM. `just push-config <vm>` syncs it in (also run by `up`);
+  `just pull-config <vm>` copies guest edits back. Paths resolve under
+  `INCA_CONFIG_HOME` (default `$HOME`; point it at one collected dir to centralize
+  if you no longer run agents on the host). Credentials stay in `cred-paths.txt`.
 - [`config/rsync-excludes.txt`](config/rsync-excludes.txt) — reconstructable
   artifacts the guest rebuilds locally (not synced).
 - [`config/cloud-init.yaml`](config/cloud-init.yaml) — machine-level provisioning

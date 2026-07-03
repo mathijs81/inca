@@ -1,0 +1,29 @@
+# Global agent config mirrored into each VM. Paths are relative to your config
+# root (INCA_CONFIG_HOME, default $HOME). `just push-config <vm>` pushes it in
+# (also run by `up`); `just pull-config <vm>` copies guest edits back out. Both are
+# additive — they never delete on the far side. CREDENTIALS live in cred-paths.txt,
+# not here.
+
+# Claude Code
+.claude/CLAUDE.md
+.claude/settings.json
+.claude/commands/
+.claude/agents/
+# Global skills: the symlinks under .claude/skills/ point into .agents/skills/, so
+# BOTH are synced for them to resolve in the guest.
+.claude/skills/
+.agents/skills/
+# Plugins (marketplaces + installed set) — stateful/heavier, but synced so plugin
+# commands work out of the box.
+.claude/plugins/installed_plugins.json
+.claude/plugins/known_marketplaces.json
+.claude/plugins/marketplaces/
+
+# Cursor CLI (cursor-agent). cli-config.json holds your settings (approvalMode,
+# permissions, model, …); note it also carries some auth state.
+.cursor/cli-config.json
+.cursor/rules/
+.cursor/skills-cursor/
+
+# GitHub Copilot CLI keeps its only global file at ~/.copilot/config.json, which
+# bundles auth — already captured by cred-paths.txt / save-creds, so nothing here.
