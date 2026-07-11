@@ -184,6 +184,8 @@ _restore-creds name=NAME:
 # Push global agent config (CLAUDE.md, commands, cursor cli-config, …) into a VM.
 # Sourced live from INCA_CONFIG_HOME (default $HOME). Run anytime to sync a
 # long-lived instance; also run by `up`. Additive — never deletes guest files.
+# -L resolves symlinks: targets are pushed denormalized so the guest gets real
+# files/dirs rather than dangling links into paths that never left the host.
 [group('instances')]
 push-config name=NAME:
     #!/usr/bin/env bash
@@ -192,7 +194,7 @@ push-config name=NAME:
     root="{{INCA_CONFIG}}"
     grep -vE '^\s*(#|$)' config/agent-config.txt | while read -r rel; do
         [ -e "$root/$rel" ] || { echo "  skip   $rel (not in $root)"; continue; }
-        rsync -aR -e "ssh {{SSH_OPTS}}" "$root/./$rel" "{{USER}}@$ip:/home/{{USER}}/"
+        rsync -aRL -e "ssh {{SSH_OPTS}}" "$root/./$rel" "{{USER}}@$ip:/home/{{USER}}/"
         echo "  pushed $rel"
     done
     echo "config -> {{name}}"
