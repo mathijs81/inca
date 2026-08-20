@@ -56,9 +56,62 @@ nothing over `cache=none` while giving up nothing useful.)
 **DAX (not available here):** virtiofs DAX would be the ideal fix — the guest maps
 file contents directly through a host-provided memory window, bypassing the guest
 page cache entirely, giving working `mmap(MAP_SHARED)` *and* host coherence without
-`cache=always`. But it needs a virtiofsd that exposes a DAX cache window. We ship
-the **Rust** `virtiofsd` (1.10), which has no DAX support (`--cache` is only the
-writeback policy); DAX lived only in the old **C** virtiofsd, deprecated and removed
+`cache=always`. But it needs a virtiofsd that exposes a DAX cache window. What runs
+is the **Rust** `virtiofsd` that Incus bundles at `/opt/incus/bin/virtiofsd` (1.14
+here, not the host's `/usr/libexec/virtiofsd`), which has no DAX support (`--cache` is
+only the writeback policy); DAX lived only in the old **C** virtiofsd, deprecated and removed
 from modern QEMU. Incus also doesn't expose the QEMU `vhost-user-fs` `cache-size`
 knob DAX requires. The guest kernel has `CONFIG_FUSE_DAX=y`, but with no host-side
 window there's nothing to map — so `-o dax` is a non-starter on this stack.
+
+## Host RAM the VM never gives back
+
+The host keeps backing every page the guest has ever touched, even after the guest
+frees it. A VM with `limits.memory: 16GiB` that once peaked near its ceiling sits at
+~13.5GB of host RSS forever, while `free` inside the guest reports 4GB used and 11GB
+free.
+
+The cause is that Incus (7.0.1) creates the balloon as a plain `virtio-balloon-pci`
+with no `free-page-reporting`. Check it from inside the guest — bit 5
+(`VIRTIO_BALLOON_F_PAGE_REPORTING`) of the balloon's feature word:
+
+```sh
+cat /sys/bus/virtio/devices/virtio0/features   # bit 5 == 1 means reporting is on
+```
+
+`just up` and `just provision` now pass this override, so new VMs get it. An existing
+VM needs the key set and a restart, because qemu.conf is generated at instance start:
+
+```sh
+incus config set <vm> raw.qemu.conf='[device "qemu_balloon"]
+free-page-reporting = "on"'
+incus restart <vm>
+```
+
+With it on the guest hands freed 2MB blocks back and the host `MADV_DONTNEED`s them,
+no intervention needed. Measured on a 2GiB test VM: qemu RSS 833MB idle, 1976MB after
+the guest touched 1.2GB, back to 826MB about 10 seconds after the guest freed it.
+
+**Reclaiming now, without a restart:** squeeze the balloon by lowering `limits.memory`
+on the running VM and raising it back. Incus drives the balloon on that change, and
+inflating it does force a real host-side release.
+
+```sh
+incus exec <vm> -- sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches'   # or: just flush
+incus config set <vm> limits.memory 6GiB
+incus config set <vm> limits.memory 16GiB
+```
+
+Don't squeeze below what the guest is actually using. `VIRTIO_BALLOON_F_DEFLATE_ON_OOM`
+is not negotiated either, so an over-inflated balloon OOM-kills things in the guest
+instead of giving the memory back.
+
+**virtiofsd is not the leak.** Its RSS looks enormous (9.4GB after 26 days on a busy
+share) because vhost-user maps guest RAM into the daemon, so every guest page it has
+DMA'd to counts in its RSS. That is the same physical memory as qemu's, counted twice.
+Check `/proc/<pid>/statm`: field 2 is resident, field 3 is shared. On ours the
+difference — virtiofsd's own heap — was 47MB. Tuning virtiofsd's caching flags does
+nothing for this, and the flags usually suggested for it are wrong on the Rust daemon
+anyway (`--cache` takes `auto|always|never|metadata`, there is no `--entry-timeout` or
+`--attr-timeout`, and `--inode-file-handles` already defaults to `prefer`, which holds
+*fewer* fds than the `never` people reach for).

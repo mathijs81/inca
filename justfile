@@ -24,6 +24,11 @@ INCA_CONFIG := env_var_or_default("INCA_CONFIG_HOME", env_var("HOME"))
 
 SSH_OPTS := "-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
+# Incus (7.0.1) builds the balloon without free-page-reporting, so the host keeps
+# backing every page the guest has ever touched, long after the guest freed it. This
+# override hands freed blocks back. Read at VM start, so a running VM needs a restart.
+BALLOON := '[device "qemu_balloon"]' + "\n" + 'free-page-reporting = "on"'
+
 _default:
     @just --list
 
@@ -64,6 +69,7 @@ provision: doctor init
         -d root,size="{{ROOTSZ}}" \
         -c limits.cpu="{{CPU}}" -c limits.memory="{{MEM}}" \
         -c security.secureboot=false \
+        -c raw.qemu.conf='{{BALLOON}}' \
         -c cloud-init.user-data="$(cat config/cloud-init.yaml)"
     @echo "waiting for guest agent…"
     @until incus exec "{{NAME}}-builder" -- true 2>/dev/null; do sleep 2; done
@@ -100,7 +106,8 @@ up name=NAME:
     incus launch "{{GOLDEN}}" "{{name}}" --vm -s "{{STORAGE}}" \
         -d root,size="{{ROOTSZ}}" \
         -c limits.cpu="{{CPU}}" -c limits.memory="{{MEM}}" \
-        -c security.secureboot=false
+        -c security.secureboot=false \
+        -c raw.qemu.conf='{{BALLOON}}'
     @echo "waiting for guest agent…"
     @until incus exec "{{name}}" -- true 2>/dev/null; do sleep 1; done
     @echo "waiting for network…"
