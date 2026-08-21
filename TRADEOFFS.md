@@ -88,9 +88,43 @@ free-page-reporting = "on"'
 incus restart <vm>
 ```
 
-With it on the guest hands freed 2MB blocks back and the host `MADV_DONTNEED`s them,
-no intervention needed. Measured on a 2GiB test VM: qemu RSS 833MB idle, 1976MB after
-the guest touched 1.2GB, back to 826MB about 10 seconds after the guest freed it.
+With it on the guest hands freed blocks back and the host `MADV_DONTNEED`s them, no
+intervention needed. Measured on a 2GiB test VM: qemu RSS 833MB idle, 1976MB after the
+guest touched 1.2GB, back to 826MB about 10 seconds after the guest freed it.
+
+### That alone is not enough: the reporting order
+
+Reporting only hands back free blocks of order >= `page_reporting_order`, and the
+kernel default is 9 (2MB). A clean test VM looks great. A VM that has done real work
+does not, because its free memory is fragmented and almost none of it sits in 2MB
+blocks. Ours had 10GB free in the guest, of which only 1.2GB was order-9 or above, so
+the host stayed at 13.5GB RSS.
+
+Check the shape of the free memory, not just the total:
+
+```sh
+incus exec <vm> -- cat /proc/buddyinfo   # columns are orders 0..10, 4KB * 2^order each
+```
+
+Turn it down (built-in, so it's a module param on `/sys`, writable at runtime and
+re-scans every zone on write):
+
+```sh
+incus exec <vm> -- sh -c 'echo 4 > /sys/module/page_reporting/parameters/page_reporting_order'
+```
+
+Measured on inca-vm at 16GiB: qemu `RssShmem` went 13.5GB -> 6.5GB over about 40
+seconds, host free 4.2GB -> 11GB, with the guest untouched at 4.2GB used. cloud-init
+now writes `/etc/tmpfiles.d/inca-page-reporting.conf` so this applies on every boot,
+but an already-baked golden image doesn't have it. Backfill an existing VM with:
+
+```sh
+incus exec <vm> -- sh -c 'printf "w /sys/module/page_reporting/parameters/page_reporting_order - - - - 4\n" > /etc/tmpfiles.d/inca-page-reporting.conf && systemd-tmpfiles --create /etc/tmpfiles.d/inca-page-reporting.conf'
+```
+
+The cost of a low order is more hole punches in the guest and a host page fault when
+the guest reuses a page, so don't go to 0. 4 (64KB) got us within 1GB of what order 0
+could have returned here.
 
 **Reclaiming now, without a restart:** squeeze the balloon by lowering `limits.memory`
 on the running VM and raising it back. Incus drives the balloon on that change, and

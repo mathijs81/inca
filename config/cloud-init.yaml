@@ -29,6 +29,13 @@ write_files:
   - path: /etc/sysctl.d/99-inca.conf
     content: |
       vm.swappiness=10
+  # virtio-balloon free-page-reporting only hands back free blocks of at least
+  # 2^order pages. The kernel default (9 = 2MB) misses almost everything once the
+  # guest's free memory is fragmented, which it always is after real work. 4 = 64KB.
+  # Lower means finer reclaim and more hole-punch/refault work. See TRADEOFFS.md.
+  - path: /etc/tmpfiles.d/inca-page-reporting.conf
+    content: |
+      w /sys/module/page_reporting/parameters/page_reporting_order - - - - 4
   # Marker so anything running in the guest can tell it's an inca dev VM.
   # profile.d covers interactive/login shells; /etc/environment (set in runcmd)
   # covers PAM sessions and most env-reading code.
