@@ -27,3 +27,7 @@
 
 # GitHub Copilot CLI keeps its only global file at ~/.copilot/config.json, which
 # bundles auth — already captured by cred-paths.txt / save-creds, so nothing here.
+
+# Antigravity (agy). Global rules live under ~/.gemini/config/, not ~/.agents/.
+.gemini/config/AGENTS.md
+.gemini/config/rules/

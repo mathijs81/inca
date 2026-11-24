@@ -204,6 +204,12 @@ push-config name=NAME:
         rsync -aRL -e "ssh {{SSH_OPTS}}" "$root/./$rel" "{{USER}}@$ip:/home/{{USER}}/"
         echo "  pushed $rel"
     done
+    # If the host only has CLAUDE.md, point Antigravity at it via an include so
+    # both agents share one source of truth without duplicating the file.
+    if [ -e "$root/.claude/CLAUDE.md" ] && [ ! -e "$root/.gemini/config/AGENTS.md" ]; then
+        ssh {{SSH_OPTS}} "{{USER}}@$ip" \
+            'mkdir -p ~/.gemini/config && if [ ! -e ~/.gemini/config/AGENTS.md ]; then printf "%s\n" "@[Global Instructions](~/.claude/CLAUDE.md)" > ~/.gemini/config/AGENTS.md && echo "  linked .gemini/config/AGENTS.md -> ~/.claude/CLAUDE.md"; fi'
+    fi
     echo "config -> {{name}}"
 
 # Copy agent config back OUT of a VM into INCA_CONFIG_HOME (default $HOME), for when
